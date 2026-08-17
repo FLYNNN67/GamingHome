@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK V2
 
 on:
   push:
@@ -18,16 +18,17 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Generate Android Project Files
+      - name: Generate Android Project Files (Two-State Logic)
         run: |
           mkdir -p app/src/main/java/com/example/gaminghome
           mkdir -p app/src/main/res/layout
 
           echo "include ':app'" > settings.gradle
 
+          # Removed AndroidX entirely to ensure 100% Pure Native API 22
           cat << 'EOF' > gradle.properties
-          android.useAndroidX=true
-          android.enableJetifier=true
+          android.useAndroidX=false
+          android.enableJetifier=false
           EOF
 
           cat << 'EOF' > build.gradle
@@ -59,12 +60,17 @@ jobs:
                   applicationId "com.example.gaminghome"
                   minSdk 22
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
               }
               buildTypes {
                   release {
-                      minifyEnabled false
+                      minifyEnabled true
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+                  }
+                  debug {
+                      minifyEnabled true
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
                   }
               }
           }
@@ -75,7 +81,7 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application
                   android:allowBackup="false"
-                  android:label="Gaming Home"
+                  android:label="Gaming Home v2"
                   android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
                   <activity
                       android:name=".MainActivity"
@@ -95,16 +101,45 @@ jobs:
 
           cat << 'EOF' > app/src/main/res/layout/activity_main.xml
           <?xml version="1.0" encoding="utf-8"?>
-          <GridView xmlns:android="http://schemas.android.com/apk/res/android"
-              android:id="@+id/apps_grid"
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent"
               android:layout_height="match_parent"
-              android:background="#000000"
-              android:numColumns="4"
-              android:horizontalSpacing="8dp"
-              android:verticalSpacing="16dp"
-              android:padding="16dp"
-              android:stretchMode="columnWidth"/>
+              android:background="#000000">
+
+              <!-- STATE 1: HOME SCREEN -->
+              <RelativeLayout
+                  android:id="@+id/home_screen"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent">
+                  
+                  <Button
+                      android:id="@+id/btn_drawer"
+                      android:layout_width="64dp"
+                      android:layout_height="64dp"
+                      android:layout_alignParentBottom="true"
+                      android:layout_centerHorizontal="true"
+                      android:layout_marginBottom="32dp"
+                      android:background="#222222"
+                      android:textColor="#FFFFFF"
+                      android:text="▲"
+                      android:textSize="24sp"
+                      android:gravity="center" />
+              </RelativeLayout>
+
+              <!-- STATE 2: APP DRAWER (Hidden Initially) -->
+              <GridView
+                  android:id="@+id/apps_grid"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:background="#000000"
+                  android:numColumns="4"
+                  android:horizontalSpacing="8dp"
+                  android:verticalSpacing="16dp"
+                  android:padding="16dp"
+                  android:stretchMode="columnWidth"
+                  android:visibility="gone"/>
+                  
+          </FrameLayout>
           EOF
 
           cat << 'EOF' > app/src/main/java/com/example/gaminghome/MainActivity.java
@@ -120,6 +155,7 @@ jobs:
           import android.view.ViewGroup;
           import android.widget.AdapterView;
           import android.widget.BaseAdapter;
+          import android.widget.Button;
           import android.widget.GridView;
           import android.widget.ImageView;
           import android.widget.LinearLayout;
@@ -129,11 +165,18 @@ jobs:
           import java.util.List;
 
           public class MainActivity extends Activity {
+              private View homeScreen;
+              private GridView appsGrid;
+
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_main);
-                  GridView appsGrid = findViewById(R.id.apps_grid);
+                  
+                  homeScreen = findViewById(R.id.home_screen);
+                  appsGrid = findViewById(R.id.apps_grid);
+                  Button btnDrawer = findViewById(R.id.btn_drawer);
+                  
                   final PackageManager pm = getPackageManager();
                   Intent intent = new Intent(Intent.ACTION_MAIN, null);
                   intent.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -182,6 +225,16 @@ jobs:
                       }
                   });
 
+                  // STATE TOGGLE: Home -> Drawer
+                  btnDrawer.setOnClickListener(new View.OnClickListener() {
+                      @Override
+                      public void onClick(View v) {
+                          homeScreen.setVisibility(View.GONE);
+                          appsGrid.setVisibility(View.VISIBLE);
+                      }
+                  });
+
+                  // LAUNCH APP
                   appsGrid.setOnItemClickListener(new AdapterView.OnItemClickListener() {
                       @Override
                       public void onItemClick(AdapterView<?> parent, View view, int pos, long id) {
@@ -194,6 +247,27 @@ jobs:
                       }
                   });
               }
+
+              // Safety check: Close Drawer if Physical BACK button is pressed
+              @Override
+              public void onBackPressed() {
+                  if (appsGrid != null && appsGrid.getVisibility() == View.VISIBLE) {
+                      appsGrid.setVisibility(View.GONE);
+                      homeScreen.setVisibility(View.VISIBLE);
+                  } else {
+                      // Do nothing. Keeps launcher running.
+                  }
+              }
+
+              // Safety check: Close Drawer if Physical HOME button is pressed
+              @Override
+              protected void onNewIntent(Intent intent) {
+                  super.onNewIntent(intent);
+                  if (appsGrid != null && appsGrid.getVisibility() == View.VISIBLE) {
+                      appsGrid.setVisibility(View.GONE);
+                      homeScreen.setVisibility(View.VISIBLE);
+                  }
+              }
           }
           EOF
 
@@ -205,8 +279,8 @@ jobs:
       - name: Compile and Build APK
         run: gradle assembleDebug
 
-      - name: Upload Final APK for Download
+      - name: Upload Final APK v2 for Download
         uses: actions/upload-artifact@v4
         with:
-          name: GamingHome-APK
+          name: GamingHome_v2-APK
           path: app/build/outputs/apk/debug/app-debug.apk
